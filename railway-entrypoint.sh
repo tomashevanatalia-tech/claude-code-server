@@ -59,6 +59,65 @@ if [ "$(id -u)" = "0" ]; then
              "$HOME/workspace" \
              "$XDG_DATA_HOME/code-server/extensions" \
              "$XDG_CONFIG_HOME/code-server" 2>/dev/null || true
+
+    # ========================================================================
+    # PERSISTENCE BOOTSTRAP
+    #
+    # The Railway volume is not always mounted at $CLAUDER_HOME. When it is
+    # mounted somewhere else (RAILWAY_VOLUME_MOUNT_PATH), the whole home
+    # directory sits on the container's ephemeral layer and every redeploy
+    # wipes it: installed extensions, CLI logins, editor settings and the
+    # workspace itself. The symlink block further down assumes $CLAUDER_HOME
+    # *is* the volume, so it silently protects nothing in that setup.
+    #
+    # Move those paths onto the volume once and link them back, so a redeploy
+    # keeps them. PERSIST_ROOT overrides the location; PERSIST_DISABLE=1 turns
+    # the whole thing off.
+    # ========================================================================
+
+    if [ -z "${PERSIST_DISABLE:-}" ] && [ -z "${PERSIST_ROOT:-}" ] \
+       && [ -n "${RAILWAY_VOLUME_MOUNT_PATH:-}" ] \
+       && [ "$RAILWAY_VOLUME_MOUNT_PATH" != "$CLAUDER_HOME" ] \
+       && [ -d "$RAILWAY_VOLUME_MOUNT_PATH" ]; then
+        PERSIST_ROOT="$RAILWAY_VOLUME_MOUNT_PATH/clauder-home"
+    fi
+
+    if [ -n "${PERSIST_ROOT:-}" ]; then
+        echo "→ Persisting home state under $PERSIST_ROOT..."
+        mkdir -p "$PERSIST_ROOT" 2>/dev/null || true
+
+        for item in workspace .claude .codex .config .npm-global \
+                    .local/bin \
+                    .local/share/code-server/extensions \
+                    .local/share/code-server/User \
+                    .claude.json .gitconfig; do
+            src="$CLAUDER_HOME/$item"
+            dst="$PERSIST_ROOT/$item"
+
+            # Already linked by an earlier boot - nothing to do.
+            [ -L "$src" ] && continue
+
+            mkdir -p "$(dirname "$dst")" 2>/dev/null || true
+
+            # The volume wins. It only gets seeded when it has nothing yet.
+            if [ ! -e "$dst" ]; then
+                if [ -e "$src" ]; then
+                    mv "$src" "$dst" 2>/dev/null || continue
+                else
+                    case "$item" in
+                        *.json|*.gitconfig) continue ;;
+                        *) mkdir -p "$dst" 2>/dev/null || continue ;;
+                    esac
+                fi
+            fi
+
+            rm -rf "$src" 2>/dev/null || true
+            mkdir -p "$(dirname "$src")" 2>/dev/null || true
+            ln -sfn "$dst" "$src" 2>/dev/null && echo "  ✓ $item"
+        done
+
+        chown -R "$CLAUDER_UID:$CLAUDER_GID" "$PERSIST_ROOT" 2>/dev/null || true
+    fi
     
     # ========================================================================
     # SHELL PROFILE SETUP
