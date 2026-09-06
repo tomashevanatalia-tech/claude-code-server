@@ -154,11 +154,10 @@ async function main() {
   assert.match(browserCompatibilityScript(38000), /var mount = "\/web\/38000"/)
   assert.match(browserCompatibilityScriptSource(38000), /var mount = "\/web\/38000"/)
   assert.match(browserCompatibilityScript(38000), /\[mount, internalMount\]\.some/)
-  assert.match(browserCompatibilityScript(38000), /addEventListener\("load"/)
+  assert.match(browserCompatibilityScript(38000), /addEventListener\("pagehide"/)
   assert.match(browserCompatibilityScript(38000), /applicationPath\(window\.location\.pathname\)/)
   assert.match(browserCompatibilityScript(38000), /mount \+ currentPath/)
   assert.match(browserCompatibilityScript(38000), /setAttribute/)
-  assert.match(browserCompatibilityScript(38000), /setTimeout\(restoreMount, 10000\)/)
 
   const browserEvents = {}
   const browserLocation = {
@@ -263,8 +262,11 @@ async function main() {
   })
   assert.equal(browserLocation.pathname, "/open/conversation")
   browserHistory.replaceState({}, "", "/conversation/42?thread=8#latest")
-  browserEvents.load()
-  assert.equal(browserLocation.pathname, "/web/38000/conversation/42")
+  // The mount stays hidden while the page lives: Antigravity's bundle mounts its
+  // router long after "load" and would render its "Not Found" route for a
+  // restored mount path.
+  assert.equal(browserEvents.load, undefined)
+  assert.equal(browserLocation.pathname, "/conversation/42")
   assert.equal(browserLocation.search, "?thread=8")
   assert.equal(browserLocation.hash, "#latest")
   mockWindow.fetch("assets/app.js")
@@ -326,11 +328,15 @@ async function main() {
   assert.equal(browserServiceWorkers[0].url, "https://ide.example/web/38000/service-worker.js")
   assert.equal(browserServiceWorkers[0].options.scope, "https://ide.example/web/38000/app/")
   browserHistory.pushState({}, "", "/conversation/43?thread=9#new")
+  assert.equal(browserLocation.pathname, "/conversation/43")
+  assert.equal(browserLocation.search, "?thread=9")
+  assert.equal(browserLocation.hash, "#new")
+  // Leaving the page restores the mount so a reload lands on the authenticated
+  // URL rather than the IDE workbench at the domain root.
+  browserEvents.pagehide()
   assert.equal(browserLocation.pathname, "/web/38000/conversation/43")
   assert.equal(browserLocation.search, "?thread=9")
   assert.equal(browserLocation.hash, "#new")
-  browserEvents.pagehide()
-  assert.equal(browserLocation.pathname, "/web/38000/conversation/43")
   assert.match(transformAntigravityHtml('<html><head lang="en"></head></html>', 38000), /<base href="\/web\/38000\/">/)
   assert.equal(
     transformAntigravityHtml('<html><body><img src="/without-head.png"></body></html>', 38000),
