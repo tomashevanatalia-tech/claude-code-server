@@ -3,5 +3,11 @@
 
 # Include only what's needed for the Railway build
 !Dockerfile
+!antigravity-proxy.js
+!ci/
+ci/**
+!ci/patch-antigravity-extension.sh
+!ci/reconcile-antigravity-metadata.js
+!ci/sync-antigravity-extension.sh
 !railway-entrypoint.sh
 !railway.json
