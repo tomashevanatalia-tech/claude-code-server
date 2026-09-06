@@ -5,22 +5,14 @@ on:
     branches:
       - main
     paths:
-      - "Dockerfile"
       - "**.sh"
       - "**.bats"
-      - "antigravity-proxy.js"
-      - "ci/**.js"
-      - "ci/test-antigravity-proxy*.js"
   pull_request:
     branches:
       - main
     paths:
-      - "Dockerfile"
       - "**.sh"
       - "**.bats"
-      - "antigravity-proxy.js"
-      - "ci/**.js"
-      - "ci/test-antigravity-proxy*.js"
 
 permissions:
   actions: none
@@ -52,7 +44,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
 
       - name: Install test utilities
-        run: apk add bash bats checkbashisms nodejs
+        run: apk add bash bats checkbashisms
 
       - name: Check Bashisms
         run: checkbashisms ./install.sh
