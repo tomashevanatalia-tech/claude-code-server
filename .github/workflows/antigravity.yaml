@@ -5,8 +5,10 @@ on:
     branches:
       - main
     paths:
+      - ".dockerignore"
       - ".github/workflows/antigravity.yaml"
       - "Dockerfile"
+      - "antigravity-proxy.js"
       - "ci/patch-antigravity-extension.sh"
       - "ci/reconcile-antigravity-metadata.js"
       - "ci/sync-antigravity-extension.sh"
@@ -16,8 +18,10 @@ on:
     branches:
       - main
     paths:
+      - ".dockerignore"
       - ".github/workflows/antigravity.yaml"
       - "Dockerfile"
+      - "antigravity-proxy.js"
       - "ci/patch-antigravity-extension.sh"
       - "ci/reconcile-antigravity-metadata.js"
       - "ci/sync-antigravity-extension.sh"
