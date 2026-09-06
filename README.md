@@ -46,25 +46,25 @@ Click the button above, or:
 
 ### Required Variables
 
-| Variable   | Description                        |
-|------------|------------------------------------|
-| `PASSWORD` | Login password for the web IDE     |
+| Variable   | Description                    |
+| ---------- | ------------------------------ |
+| `PASSWORD` | Login password for the web IDE |
 
 ### Optional Variables
 
-| Variable       | Default                        | Description                              |
-|----------------|--------------------------------|------------------------------------------|
-| `CLAUDER_HOME` | `/home/clauder`                | Volume mount path                        |
-| `RUN_AS_USER`  | `clauder`                      | Set to `root` if you need root access    |
-| `APP_NAME`     | `Claude Code Server`           | Login page title                         |
-| `WELCOME_TEXT` | `Welcome to Claude Code Server`| Login page message                       |
+| Variable       | Default                         | Description                           |
+| -------------- | ------------------------------- | ------------------------------------- |
+| `CLAUDER_HOME` | `/home/clauder`                 | Volume mount path                     |
+| `RUN_AS_USER`  | `clauder`                       | Set to `root` if you need root access |
+| `APP_NAME`     | `Claude Code Server`            | Login page title                      |
+| `WELCOME_TEXT` | `Welcome to Claude Code Server` | Login page message                    |
 
 ### Volume Configuration
 
 > ⚠️ **CRITICAL**: Without a volume, ALL data is lost on every redeploy!
 
 | Setting        | Value            |
-|----------------|------------------|
+| -------------- | ---------------- |
 | **Mount Path** | `/home/clauder`  |
 | **Size**       | 5GB+ recommended |
 
