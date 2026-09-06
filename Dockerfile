@@ -85,23 +85,13 @@ RUN mkdir -p \
     /home/clauder/.local/bin \
     /home/clauder/.local/node \
     /home/clauder/.claude \
-    /home/clauder/.gemini \
     /home/clauder/entrypoint.d \
     /home/clauder/workspace \
     && chown -R 1000:1000 /home/clauder
 
 # Copy our custom entrypoint (replaces base image's entrypoint)
 COPY railway-entrypoint.sh /usr/bin/railway-entrypoint.sh
-COPY antigravity-proxy.js /usr/local/lib/antigravity-proxy.js
-COPY ci/patch-antigravity-extension.sh /usr/local/lib/patch-antigravity-extension.sh
-COPY ci/sync-antigravity-extension.sh /usr/local/lib/sync-antigravity-extension.sh
-COPY ci/reconcile-antigravity-metadata.js /usr/local/lib/reconcile-antigravity-metadata.js
-RUN chmod +x \
-    /usr/bin/railway-entrypoint.sh \
-    /usr/local/lib/antigravity-proxy.js \
-    /usr/local/lib/patch-antigravity-extension.sh \
-    /usr/local/lib/sync-antigravity-extension.sh \
-    /usr/local/lib/reconcile-antigravity-metadata.js
+RUN chmod +x /usr/bin/railway-entrypoint.sh
 
 # ============================================================================
 # CLAUDE CODE CLI INSTALLATION
@@ -110,33 +100,6 @@ RUN chmod +x \
 
 RUN npm install -g @anthropic-ai/claude-code \
     && echo "Claude CLI installed: $(claude --version 2>/dev/null || echo 'checking...')"
-
-# ============================================================================
-# GOOGLE ANTIGRAVITY IDE EXTENSION
-# Run the official workspace extension and its `agy --hub` backend inside the
-# cloud container. Pin both the release and digest: Marketplace `latest` must
-# never change a production image without review.
-# ============================================================================
-
-ARG ANTIGRAVITY_EXTENSION_VERSION=1.2.0
-ARG ANTIGRAVITY_EXTENSION_SHA256=43b6001a2e0ec5510ad8fb2faac7c0e755199e7f2b879ba76d717e9aecf323d3
-ENV ANTIGRAVITY_EXTENSION_VERSION=${ANTIGRAVITY_EXTENSION_VERSION}
-ENV ANTIGRAVITY_SERVER_PORT=38000
-
-RUN mkdir -p /opt/antigravity \
-    && antigravity_vsix="/opt/antigravity/google-antigravity-${ANTIGRAVITY_EXTENSION_VERSION}.vsix" \
-    && curl --compressed --fail --silent --show-error --location --retry 3 \
-        "https://marketplace.visualstudio.com/_apis/public/gallery/publishers/Google/vsextensions/google-antigravity/${ANTIGRAVITY_EXTENSION_VERSION}/vspackage" \
-        --output "$antigravity_vsix" \
-    && echo "${ANTIGRAVITY_EXTENSION_SHA256}  ${antigravity_vsix}" | sha256sum --check --strict \
-    && code-server \
-        --extensions-dir "$XDG_DATA_HOME/code-server/extensions" \
-        --install-extension "$antigravity_vsix" \
-        --force \
-    && /usr/local/lib/patch-antigravity-extension.sh \
-        "$XDG_DATA_HOME/code-server/extensions/google.google-antigravity-${ANTIGRAVITY_EXTENSION_VERSION}" \
-        "$ANTIGRAVITY_SERVER_PORT" \
-    && chown -R 1000:1000 /home/clauder
 
 # ============================================================================
 # RUNTIME
@@ -148,3 +111,5 @@ EXPOSE 8080
 
 # Use our entrypoint which calls code-server directly
 ENTRYPOINT ["/usr/bin/railway-entrypoint.sh"]
+
+
