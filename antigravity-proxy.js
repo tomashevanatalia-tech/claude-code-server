@@ -11,6 +11,14 @@ const zlib = require("zlib")
 const externalPort = Number(process.env.PORT || 8080)
 const internalPort = Number(process.env.CODE_SERVER_INTERNAL_PORT || 8081)
 const antigravityPort = Number(process.env.ANTIGRAVITY_SERVER_PORT || 38000)
+// Antigravity's hub answers loopback callers only: any other Host header gets
+// "Unauthorized Host (Localhost only)". The cloud IDE is reached by its public
+// domain and code-server forwards that Host verbatim to the hub, so the UI
+// would never render. A loopback relay rewrites the Host on that last hop only.
+// code-server still sees the browser's real Host and Origin, which its proxy
+// routes check against each other before authenticating the request.
+let hostHeaderRelayPort = 0
+
 const mountPattern = /^\/web\/(\d+)(\/.*)?$/
 const codeServerProxyPattern = /^\/proxy\/(\d+)(\/.*)?$/
 const maxHtmlBytes = 8 * 1024 * 1024
@@ -50,6 +58,67 @@ function routeRequestPath(requestPath) {
   if (proxyMatch) return { path: requestPath, port: Number(proxyMatch[1]) }
 
   return { path: requestPath, port: undefined }
+}
+
+function relayRequestPath(requestPath, port, relayPort) {
+  if (port !== antigravityPort || !relayPort || relayPort === antigravityPort) return requestPath
+  const prefix = `/proxy/${antigravityPort}`
+  if (requestPath !== prefix && !requestPath.startsWith(`${prefix}/`)) return requestPath
+  return `/proxy/${relayPort}${requestPath.slice(prefix.length)}`
+}
+
+function createHostHeaderRelay(hubPort = antigravityPort) {
+  const loopbackHost = `127.0.0.1:${hubPort}`
+  const relay = http.createServer((req, res) => {
+    const upstream = http.request(
+      {
+        hostname: "127.0.0.1",
+        port: hubPort,
+        method: req.method,
+        path: req.url,
+        headers: { ...req.headers, host: loopbackHost },
+      },
+      (upstreamResponse) => {
+        upstreamResponse.on("error", () => res.destroy())
+        res.writeHead(upstreamResponse.statusCode || 502, upstreamResponse.headers)
+        upstreamResponse.pipe(res)
+      },
+    )
+    upstream.on("error", (error) => {
+      if (res.headersSent) {
+        res.destroy()
+        return
+      }
+      const isStarting = error.code === "ECONNREFUSED"
+      res.writeHead(isStarting ? 503 : 502, {
+        "content-type": "text/plain; charset=utf-8",
+        ...(isStarting ? { "retry-after": "1" } : {}),
+      })
+      res.end(`Antigravity hub ${isStarting ? "is starting" : "unavailable"}: ${error.code || "connection error"}`)
+    })
+    req.on("error", () => upstream.destroy())
+    req.on("aborted", () => upstream.destroy())
+    res.on("error", () => {
+      upstream.destroy()
+      req.destroy()
+    })
+    req.pipe(upstream)
+  })
+  relay.on("upgrade", (req, socket, head) => {
+    const upstream = net.connect(hubPort, "127.0.0.1", () => {
+      const headers = Object.entries({ ...req.headers, host: loopbackHost })
+        .map(([name, value]) => `${name}: ${Array.isArray(value) ? value.join(", ") : value}`)
+        .join("\r\n")
+      upstream.write(`${req.method} ${req.url} HTTP/${req.httpVersion}\r\n${headers}\r\n\r\n`)
+      if (head.length) upstream.write(head)
+      socket.pipe(upstream).pipe(socket)
+    })
+    upstream.on("error", () => socket.destroy())
+    upstream.on("close", () => socket.destroy())
+    socket.on("error", () => upstream.destroy())
+    socket.on("close", () => upstream.destroy())
+  })
+  return relay
 }
 
 function browserCompatibilityScriptSource(port) {
@@ -552,7 +621,7 @@ function proxyHttp(req, res) {
       hostname: "127.0.0.1",
       port: internalPort,
       method: req.method,
-      path: routed.path,
+      path: relayRequestPath(routed.path, routed.port, hostHeaderRelayPort),
       headers,
     },
     (upstreamResponse) => {
@@ -707,7 +776,8 @@ function proxyWebSocket(req, socket, head) {
     const headers = Object.entries(forwardedRequestHeaders(req))
       .map(([name, value]) => `${name}: ${Array.isArray(value) ? value.join(", ") : value}`)
       .join("\r\n")
-    upstream.write(`${req.method} ${routed.path} HTTP/${req.httpVersion}\r\n${headers}\r\n\r\n`)
+    const upstreamPath = relayRequestPath(routed.path, routed.port, hostHeaderRelayPort)
+    upstream.write(`${req.method} ${upstreamPath} HTTP/${req.httpVersion}\r\n${headers}\r\n\r\n`)
     if (head.length) upstream.write(head)
     socket.pipe(upstream).pipe(socket)
   })
@@ -736,6 +806,18 @@ function main() {
   const codeServer = spawn(codeServerArgs[0], codeServerArgs.slice(1), {
     env: codeServerEnvironment(process.env, externalPort),
     stdio: "inherit",
+  })
+
+  const hostHeaderRelay = createHostHeaderRelay()
+  hostHeaderRelay.on("error", (error) => {
+    // Without the relay the hub still answers loopback callers, so keep the IDE
+    // running and let Antigravity report its own unauthorized-host page.
+    hostHeaderRelayPort = 0
+    console.error(`Antigravity host header relay unavailable: ${error.code || "server error"}`)
+  })
+  hostHeaderRelay.listen(0, "127.0.0.1", () => {
+    hostHeaderRelayPort = hostHeaderRelay.address().port
+    console.log(`Antigravity host header relay listening on 127.0.0.1:${hostHeaderRelayPort}`)
   })
 
   const server = http.createServer(proxyHttp)
@@ -783,6 +865,7 @@ function main() {
   })
   const shutdown = (signal) => {
     terminating = true
+    hostHeaderRelay.close()
     if (!forceCloseTimer) {
       forceCloseTimer = setTimeout(() => closeServer(undefined, true), 5000)
     }
@@ -811,6 +894,7 @@ if (require.main === module) {
 
 module.exports = {
   browserCompatibilityScript,
+  createHostHeaderRelay,
   browserCompatibilityScriptSource,
   codeServerEnvironment,
   compatibilityHash,
@@ -818,6 +902,7 @@ module.exports = {
   forwardHeaders,
   forwardedRequestHeaders,
   rewriteMetaCsp,
+  relayRequestPath,
   rewriteMountedResponseHeaders,
   routeRequestPath,
   stripHopByHopHeaders,

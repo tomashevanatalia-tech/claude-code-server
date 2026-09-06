@@ -5,14 +5,18 @@
 const assert = require("assert/strict")
 const vm = require("vm")
 const zlib = require("zlib")
+const http = require("http")
+const net = require("net")
 const {
   browserCompatibilityScript,
+  createHostHeaderRelay,
   browserCompatibilityScriptSource,
   codeServerEnvironment,
   compatibilityHash,
   decodeResponseBody,
   forwardHeaders,
   forwardedRequestHeaders,
+  relayRequestPath,
   routeRequestPath,
   rewriteMetaCsp,
   rewriteMountedResponseHeaders,
@@ -22,6 +26,66 @@ const {
   transformAntigravityHtml,
   validatePortPair,
 } = require("../antigravity-proxy")
+
+function listen(server) {
+  return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve(server.address().port)))
+}
+
+// Stands in for Antigravity's hub, which serves loopback callers only.
+async function withLoopbackOnlyHub(run) {
+  const hub = http.createServer((req, res) => {
+    const hostname = String(req.headers.host || "").split(":")[0]
+    if (hostname !== "127.0.0.1" && hostname !== "localhost") {
+      res.writeHead(421, { "content-type": "text/plain; charset=utf-8" })
+      res.end("Unauthorized Host (Localhost only)")
+      return
+    }
+    res.writeHead(200, { "content-type": "text/plain; charset=utf-8" })
+    res.end("hub ok")
+  })
+  hub.on("upgrade", (req, socket) => {
+    const hostname = String(req.headers.host || "").split(":")[0]
+    if (hostname !== "127.0.0.1" && hostname !== "localhost") {
+      socket.end("HTTP/1.1 421 Misdirected Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n")
+      return
+    }
+    socket.end("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
+  })
+  const port = await listen(hub)
+  try {
+    await run(port)
+  } finally {
+    hub.close()
+  }
+}
+
+function hubRequest(port, headers) {
+  return new Promise((resolve, reject) => {
+    const request = http.request({ hostname: "127.0.0.1", port, path: "/", headers }, (response) => {
+      const chunks = []
+      response.on("data", (chunk) => chunks.push(chunk))
+      response.on("end", () => resolve({ statusCode: response.statusCode, body: Buffer.concat(chunks).toString() }))
+    })
+    request.on("error", reject)
+    request.end()
+  })
+}
+
+function hubUpgrade(port, host) {
+  return new Promise((resolve, reject) => {
+    const socket = net.connect(port, "127.0.0.1", () => {
+      socket.write(
+        `GET /connect-websocket HTTP/1.1\r\nHost: ${host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n` +
+          "Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n",
+      )
+    })
+    socket.once("data", (chunk) => {
+      socket.destroy()
+      resolve(chunk.toString())
+    })
+    socket.on("error", reject)
+  })
+}
 
 async function main() {
   assert.doesNotThrow(() => validatePortPair(8080, 8081))
@@ -402,6 +466,34 @@ async function main() {
     rewriteMetaCsp(`<meta http-equiv="Content-Security-Policy" content="${unsafeInlinePolicy}">`, 38000),
     `<meta http-equiv="Content-Security-Policy" content="${unsafeInlinePolicy}">`,
   )
+
+  assert.equal(relayRequestPath("/proxy/38000/main.js", 38000, 41234), "/proxy/41234/main.js")
+  assert.equal(relayRequestPath("/proxy/38000", 38000, 41234), "/proxy/41234")
+  assert.equal(relayRequestPath("/proxy/38000/?extensionView=true", 38000, 41234), "/proxy/41234/?extensionView=true")
+  assert.equal(relayRequestPath("/proxy/380001/main.js", 38000, 41234), "/proxy/380001/main.js")
+  assert.equal(relayRequestPath("/proxy/8080/main.js", 8080, 41234), "/proxy/8080/main.js")
+  assert.equal(relayRequestPath("/healthz", undefined, 41234), "/healthz")
+  assert.equal(relayRequestPath("/proxy/38000/main.js", 38000, 0), "/proxy/38000/main.js")
+  assert.equal(relayRequestPath("/proxy/38000/main.js", 38000, 38000), "/proxy/38000/main.js")
+
+  await withLoopbackOnlyHub(async (hubPort) => {
+    const relay = createHostHeaderRelay(hubPort)
+    const relayPort = await listen(relay)
+    try {
+      const direct = await hubRequest(hubPort, { host: "ide.example.com" })
+      assert.equal(direct.statusCode, 421)
+      assert.equal(direct.body, "Unauthorized Host (Localhost only)")
+
+      const relayed = await hubRequest(relayPort, { host: "ide.example.com" })
+      assert.equal(relayed.statusCode, 200)
+      assert.equal(relayed.body, "hub ok")
+
+      const upgraded = await hubUpgrade(relayPort, "ide.example.com")
+      assert.match(upgraded, /^HTTP\/1\.1 101 /)
+    } finally {
+      relay.close()
+    }
+  })
 
   console.log("Antigravity cloud proxy tests passed")
 }

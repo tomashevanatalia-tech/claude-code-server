@@ -285,7 +285,10 @@ async function main() {
       else socket.once("data", reply)
       return
     }
-    assert.equal(req.url, "/proxy/38000/connect-websocket")
+    // The Antigravity hub refuses non-loopback Host headers, so websocket traffic
+    // is routed through the proxy's loopback relay instead of straight at 38000.
+    assert.match(req.url, /^\/proxy\/\d+\/connect-websocket$/)
+    assert.notEqual(req.url, "/proxy/38000/connect-websocket")
     socket.end("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n")
   })
 
