@@ -56,25 +56,30 @@ ck() {
 }
 
 echo "1. first boot: home has content, volume is empty"
-mkdir -p "$TMP/h/workspace" "$TMP/h/.claude" "$TMP/v"
+mkdir -p "$TMP/h/workspace" "$TMP/h/.claude" \
+    "$TMP/h/.gemini/antigravity" "$TMP/v"
 echo from-home > "$TMP/h/workspace/file.txt"
 echo cfg > "$TMP/h/.claude.json"
+echo agy-session > "$TMP/h/.gemini/antigravity/session.json"
 run "$TMP/h" "$TMP/v"
 ck "workspace became a link"  "$([ -L "$TMP/h/workspace" ] && echo yes || echo no)" "yes"
 ck "content moved to volume"  "$(cat "$TMP/v/workspace/file.txt" 2>/dev/null)" "from-home"
 ck "readable through link"    "$(cat "$TMP/h/workspace/file.txt" 2>/dev/null)" "from-home"
 ck ".claude.json on volume"   "$(cat "$TMP/v/.claude.json" 2>/dev/null)" "cfg"
+ck "Antigravity state moved"  "$(cat "$TMP/v/.gemini/antigravity/session.json" 2>/dev/null)" "agy-session"
 
 echo "2. redeploy: home is fresh, volume has content - volume wins"
-rm -rf "$TMP/h"; mkdir -p "$TMP/h/workspace" "$TMP/h/.claude"
+rm -rf "$TMP/h"; mkdir -p "$TMP/h/workspace" "$TMP/h/.claude" "$TMP/h/.gemini"
 run "$TMP/h" "$TMP/v"
 ck "work survived redeploy"   "$(cat "$TMP/h/workspace/file.txt" 2>/dev/null)" "from-home"
 ck "settings came back"       "$(cat "$TMP/h/.claude.json" 2>/dev/null)" "cfg"
+ck "Antigravity login came back" "$(cat "$TMP/h/.gemini/antigravity/session.json" 2>/dev/null)" "agy-session"
 
 echo "3. running twice in a row changes nothing"
 run "$TMP/h" "$TMP/v"
 ck "idempotent"               "$(cat "$TMP/h/workspace/file.txt" 2>/dev/null)" "from-home"
 ck "link not nested"          "$([ -L "$TMP/h/workspace" ] && echo yes || echo no)" "yes"
+ck "Antigravity link not nested" "$([ -L "$TMP/h/.gemini" ] && echo yes || echo no)" "yes"
 
 echo "4. no volume: home is left alone"
 mkdir -p "$TMP/h2/workspace"; echo local > "$TMP/h2/workspace/file.txt"
