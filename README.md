@@ -59,7 +59,11 @@ behind code-server's authenticated `/web/38000/` route. The image publishes
 only the outer IDE port; Railway routes that single port and does not publish
 the hub port. A small compatibility proxy preserves Antigravity's root-relative
 assets and WebSocket calls so the official VS Code webview renders inside the
-cloud IDE without a separate public endpoint for the agent backend. The pinned
+cloud IDE without a separate public endpoint for the agent backend. The hub
+answers loopback callers only, so the proxy hands its traffic to an internal
+relay that rewrites the `Host` header on that last hop; code-server still sees
+the browser's real `Host` and `Origin`, which its authenticated proxy routes
+check against each other. The pinned
 extension's loopback target is checked in CI, and the cloud compatibility test
 confirmed that its downloaded `agy` hub listens on `127.0.0.1`.
 
