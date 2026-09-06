@@ -305,9 +305,12 @@ function browserCompatibilityScriptSource(port) {
     nativeHistoryReplaceState(history.state, "", mount + currentPath + window.location.search + window.location.hash);
     installHistoryGuard();
   }
-  window.addEventListener("load", restoreMount, { once: true });
+  // Restoring the mount while the page is alive puts it back in front of the
+  // router: Antigravity's bundle mounts long after "load" fires, reads
+  // location.pathname then, and renders its "Not Found" route for the mounted
+  // path. Keep the application path for the whole session and put the mount
+  // back only on the way out, so a reload still lands on the authenticated URL.
   window.addEventListener("pagehide", restoreMount, { once: true });
-  setTimeout(restoreMount, 10000);
 })();
 `
 }
