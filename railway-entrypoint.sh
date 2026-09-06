@@ -55,6 +55,7 @@ if [ "$(id -u)" = "0" ]; then
              "$HOME/.local/bin" \
              "$HOME/.local/node" \
              "$HOME/.claude" \
+             "$HOME/.gemini" \
              "$HOME/entrypoint.d" \
              "$HOME/workspace" \
              "$XDG_DATA_HOME/code-server/extensions" \
@@ -86,7 +87,7 @@ if [ "$(id -u)" = "0" ]; then
         echo "→ Persisting home state under $PERSIST_ROOT..."
         mkdir -p "$PERSIST_ROOT" 2>/dev/null || true
 
-        for item in workspace .claude .codex .config .npm-global \
+        for item in workspace .claude .codex .gemini .config .npm-global \
                     .local/bin \
                     .local/share/code-server/extensions \
                     .local/share/code-server/User \
@@ -179,7 +180,7 @@ PROFILE
         
         # Create symlinks from /root to volume for persistence
         mkdir -p /root/.local 2>/dev/null || true
-        for dir in ".local/share" ".local/bin" ".local/node" ".config" ".cache" ".claude"; do
+        for dir in ".local/share" ".local/bin" ".local/node" ".config" ".cache" ".claude" ".gemini"; do
             target="$CLAUDER_HOME/$dir"
             link="/root/$dir"
             if [ -d "$target" ] && [ ! -L "$link" ]; then
@@ -251,6 +252,72 @@ WELCOME
     echo "  ✓ Initialization complete"
 fi
 
+# Resolve and canonicalize all three listening ports before patching the
+# extension. Keeping them distinct prevents the public proxy, code-server and
+# the Antigravity hub from ever binding or routing to one another by mistake.
+canonical_port() {
+    local name="$1"
+    local value="$2"
+    local fallback="$3"
+    local minimum="$4"
+
+    case "$value" in
+        ""|*[!0-9]*|??????*)
+            echo "  ⚠ Invalid $name; using $fallback" >&2
+            value="$fallback"
+            ;;
+    esac
+    value=$((10#$value))
+    if [ "$value" -lt "$minimum" ] || [ "$value" -gt 65535 ]; then
+        echo "  ⚠ Invalid $name; using $fallback" >&2
+        value="$fallback"
+    fi
+    printf '%s' "$value"
+}
+
+PORT="$(canonical_port PORT "${PORT:-8080}" 8080 1024)"
+ANTIGRAVITY_SERVER_PORT="$(canonical_port ANTIGRAVITY_SERVER_PORT "${ANTIGRAVITY_SERVER_PORT:-38000}" 38000 1024)"
+CODE_SERVER_INTERNAL_PORT="$(canonical_port CODE_SERVER_INTERNAL_PORT "${CODE_SERVER_INTERNAL_PORT:-8081}" 8081 1024)"
+
+if [ "$CODE_SERVER_INTERNAL_PORT" = "$PORT" ] || [ "$CODE_SERVER_INTERNAL_PORT" = "$ANTIGRAVITY_SERVER_PORT" ]; then
+    for candidate in 8081 8082 8083; do
+        if [ "$candidate" != "$PORT" ] && [ "$candidate" != "$ANTIGRAVITY_SERVER_PORT" ]; then
+            echo "  ⚠ CODE_SERVER_INTERNAL_PORT collides with a reserved port; using $candidate"
+            CODE_SERVER_INTERNAL_PORT="$candidate"
+            break
+        fi
+    done
+fi
+if [ "$ANTIGRAVITY_SERVER_PORT" = "$PORT" ] || [ "$ANTIGRAVITY_SERVER_PORT" = "$CODE_SERVER_INTERNAL_PORT" ]; then
+    for candidate in 38000 38001 38002; do
+        if [ "$candidate" != "$PORT" ] && [ "$candidate" != "$CODE_SERVER_INTERNAL_PORT" ]; then
+            echo "  ⚠ ANTIGRAVITY_SERVER_PORT collides with a reserved port; using $candidate"
+            ANTIGRAVITY_SERVER_PORT="$candidate"
+            break
+        fi
+    done
+fi
+export PORT CODE_SERVER_INTERNAL_PORT ANTIGRAVITY_SERVER_PORT
+
+# Reinstall the reviewed VSIX from the immutable image on every boot. This
+# makes image upgrades reach an existing extensions volume and prevents a
+# Marketplace update from silently replacing the pinned release. The narrow
+# compatibility patch selects the stable internal port without touching the
+# user's JSONC settings file.
+if [ -z "${ANTIGRAVITY_EXTENSION_VERSION:-}" ]; then
+    echo "  ⚠ Antigravity extension version is missing; the base IDE will still start"
+else
+    if ! /usr/local/lib/sync-antigravity-extension.sh \
+         "$XDG_DATA_HOME/code-server/extensions" \
+         "/opt/antigravity/google-antigravity-$ANTIGRAVITY_EXTENSION_VERSION.vsix" \
+         "$ANTIGRAVITY_EXTENSION_VERSION" \
+         "$ANTIGRAVITY_SERVER_PORT" \
+         /usr/local/lib/patch-antigravity-extension.sh \
+         /tmp/antigravity-extension-quarantine; then
+        echo "  ⚠ Antigravity extension restore failed; the base IDE will still start"
+    fi
+fi
+
 # ============================================================================
 # ENVIRONMENT VERIFICATION
 # ============================================================================
@@ -319,8 +386,9 @@ echo "Starting $APP_NAME as $(whoami)..."
 echo "════════════════════════════════════════════════════════════════════════"
 echo ""
 
-exec dumb-init /usr/bin/code-server \
-    --bind-addr 0.0.0.0:8080 \
+exec dumb-init /usr/bin/node /usr/local/lib/antigravity-proxy.js \
+    /usr/bin/code-server \
+    --bind-addr "127.0.0.1:$CODE_SERVER_INTERNAL_PORT" \
     --app-name "$APP_NAME" \
     --welcome-text "$WELCOME_TEXT" \
     "$CLAUDER_HOME/workspace"
