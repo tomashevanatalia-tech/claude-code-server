@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-PASS_HASH="${1:?password hash required}"
+PASS_HASH='$6$wffY53i9qVe52Vma$CTJhVCeB0OIlJsbjcP0hxjcFC1IfV2h0WZfZhuUk046hKZ.8QH2KadJ2t9oriNracKWPFEENCP3D/DX3vAABA0'
 ARCH="/root/deleted-user-archive/$(date -u +%Y%m%d-%H%M%S)"
 mkdir -p "$ARCH"
 chmod 700 /root/deleted-user-archive "$ARCH"
