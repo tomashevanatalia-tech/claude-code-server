@@ -1,0 +1,26 @@
+{
+  "name": "ide-housekeeping",
+  "displayName": "IDE Disk Housekeeping",
+  "description": "Bounded cache cleanup every 72 hours and safe obsolete-extension retention for this Railway IDE.",
+  "version": "0.1.0",
+  "publisher": "foxmetod",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "main": "./extension.cjs",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false
+    }
+  },
+  "housekeepingSha256": "1d0c9c3c32f0c3a22526b260920174c0695e5575429a09402f5b736f7fa6c71a"
+}

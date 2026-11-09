@@ -190,7 +190,7 @@ class HousekeepingTests(unittest.TestCase):
     def test_log_retention_does_not_touch_active_old_log(self):
         old = self.file(".local/share/code-server/logs/old/old.log")
         active = self.file(".local/share/code-server/logs/old/active.log")
-        cleaner = self.cleaner()
+        cleaner = self.cleaner(prune_logs=True)
         cleaner.protected.add(active)
         cleaner.plan()
         cleaner.apply()
@@ -205,7 +205,7 @@ class HousekeepingTests(unittest.TestCase):
             stream.seek(-7, os.SEEK_END)
             stream.write(b"the-end")
         before = log.stat().st_ino
-        cleaner = self.cleaner()
+        cleaner = self.cleaner(prune_logs=True)
         cleaner.protected.add(log)
         cleaner.plan()
         cleaner.apply()
@@ -235,6 +235,66 @@ class HousekeepingTests(unittest.TestCase):
         cleaner.plan()
         cleaner.apply()
         self.assertEqual(self.cleaner().plan(), [])
+
+    def test_existing_logs_are_preserved_by_default(self):
+        log = self.file(".local/share/code-server/logs/old/history.log")
+        cleaner = self.cleaner()
+        cleaner.plan()
+        cleaner.apply()
+        self.assertTrue(log.exists())
+
+    def test_default_interval_is_three_days(self):
+        self.assertEqual(MODULE.DEFAULT_INTERVAL, 3 * DAY)
+
+    def test_restart_keeps_remaining_schedule_delay(self):
+        self.assertEqual(
+            MODULE.remaining_delay(self.now - 2 * DAY, self.now, 3 * DAY), DAY
+        )
+        self.assertEqual(
+            MODULE.remaining_delay(self.now - 4 * DAY, self.now, 3 * DAY), 0
+        )
+
+    def test_invalid_saved_schedule_is_ignored(self):
+        for invalid in (None, "bad", True, self.now + DAY, -1, float("nan")):
+            self.assertEqual(MODULE.remaining_delay(invalid, self.now, 3 * DAY), 0)
+
+    @unittest.skipUnless(sys.platform == "linux", "Requires Linux advisory locks")
+    def test_loop_honors_saved_schedule_and_rejects_duplicate_process(self):
+        state = self.root / ".local/state/ide-housekeeping"
+        state.mkdir(parents=True)
+        (state / "last-run.json").write_text(json.dumps({"completed_at": time.time()}))
+        retained = self.file(".npm/_cacache/expired")
+        command = [
+            sys.executable,
+            str(SCRIPT),
+            "--root",
+            str(self.root),
+            "--apply",
+            "--loop",
+            "--interval",
+            "300",
+        ]
+        child = subprocess.Popen(
+            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+        try:
+            for _ in range(60):
+                if (state / "lock").exists() and (state / "lock").read_text():
+                    break
+                time.sleep(0.05)
+            self.assertEqual(int((state / "lock").read_text()), child.pid)
+            self.assertIsNone(child.poll())
+            duplicate = subprocess.run(
+                command, capture_output=True, timeout=5, check=True
+            )
+            self.assertEqual(duplicate.stdout, b"")
+            self.assertTrue(
+                retained.exists(),
+                "Restart must not run cleanup before its saved due time",
+            )
+        finally:
+            child.terminate()
+            child.communicate(timeout=5)
 
     def test_filesystem_root_is_rejected(self):
         with self.assertRaises(ValueError):

@@ -5,14 +5,24 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import re
 import shutil
+import tempfile
 import time
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 MIB = 1024**2
 DAY = 86400
+DEFAULT_INTERVAL = 3 * DAY
+
+
+def remaining_delay(completed, now: float, interval: int) -> float:
+    if type(completed) not in (int, float) or not 0 <= completed <= now:
+        return 0
+    return max(0, interval - (now - completed))
 
 
 def read_json(path: Path, fallback):
@@ -49,12 +59,13 @@ def process_paths(proc: Path = Path("/proc")) -> set[Path]:
 
 
 class Cleaner:
-    def __init__(self, root: Path, *, now=None, protected=None):
+    def __init__(self, root: Path, *, now=None, protected=None, prune_logs=False):
         self.root = root.resolve(strict=True)
         if not self.root.is_dir() or self.root == Path(self.root.anchor):
             raise ValueError("An explicit mounted-volume directory is required")
         self.device = self.root.stat().st_dev
         self.now = time.time() if now is None else now
+        self.prune_logs = prune_logs
         self.scan_processes = protected is None
         self.protected = process_paths() if self.scan_processes else set(protected)
         self.operations = []
@@ -242,7 +253,11 @@ class Cleaner:
                     self.cache(path, budget=budget)
             for relative, method in [
                 (".local/share/code-server/extensions", self.extensions),
-                (".local/share/code-server/logs", self.logs),
+                *(
+                    [(".local/share/code-server/logs", self.logs)]
+                    if self.prune_logs
+                    else []
+                ),
             ]:
                 path = profile / relative
                 canonical = path.resolve()
@@ -295,7 +310,12 @@ def main():
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--loop", action="store_true")
-    parser.add_argument("--interval", type=int, default=3600)
+    parser.add_argument("--interval", type=int, default=DEFAULT_INTERVAL)
+    parser.add_argument(
+        "--prune-logs",
+        action="store_true",
+        help="Explicitly opt into IDE log deletion/rotation",
+    )
     args = parser.parse_args()
     if args.loop and not args.apply:
         parser.error("--loop requires --apply")
@@ -304,7 +324,8 @@ def main():
     args.root = Cleaner(args.root, protected=set()).root
     # One process per volume; a second startup/terminal cannot duplicate the loop.
     lock = None
-    if args.loop:
+    state = args.root / ".local/state/ide-housekeeping"
+    if args.apply:
         import fcntl
 
         state = args.root.resolve(strict=True) / ".local/state/ide-housekeeping"
@@ -319,9 +340,42 @@ def main():
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return
+        lock.seek(0)
+        lock.truncate()
+        lock.write(str(os.getpid()))
+        lock.flush()
+    logger = None
+    if args.loop:
+        logfile = state / "run.log"
+        if logfile.is_symlink():
+            raise ValueError("Unsafe housekeeping log path")
+        logger = logging.getLogger("ide-housekeeping")
+        logger.setLevel(logging.INFO)
+        logger.addHandler(
+            RotatingFileHandler(logfile, maxBytes=MIB, backupCount=1, encoding="utf-8")
+        )
+
+    def emit(report):
+        if logger:
+            report = dict(report)
+            operations = report.pop("operations", [])
+            report["operation_count"] = len(operations)
+            report["errors"] = report.get("errors", [])[:10]
+            logger.info(json.dumps(report, ensure_ascii=False))
+        else:
+            print(json.dumps(report, ensure_ascii=False), flush=True)
+
     while True:
+        if args.loop:
+            previous = read_json(state / "last-run.json", {})
+            completed = (
+                previous.get("completed_at") if isinstance(previous, dict) else None
+            )
+            delay = remaining_delay(completed, time.time(), args.interval)
+            if delay:
+                time.sleep(delay)
         try:
-            cleaner = Cleaner(args.root)
+            cleaner = Cleaner(args.root, prune_logs=args.prune_logs)
             cleaner.plan()
             before = shutil.disk_usage(cleaner.root)
             report = {
@@ -335,14 +389,15 @@ def main():
                 report["free_bytes_change"] = (
                     shutil.disk_usage(cleaner.root).free - before.free
                 )
-            print(json.dumps(report, ensure_ascii=False), flush=True)
+                if not report["errors"]:
+                    with tempfile.NamedTemporaryFile(
+                        mode="w", dir=state, delete=False, encoding="utf-8"
+                    ) as saved:
+                        json.dump({"completed_at": time.time()}, saved)
+                    os.replace(saved.name, state / "last-run.json")
+            emit(report)
         except (OSError, ValueError) as error:
-            print(
-                json.dumps(
-                    {"component": "ide-housekeeping", "error": type(error).__name__}
-                ),
-                flush=True,
-            )
+            emit({"component": "ide-housekeeping", "error": type(error).__name__})
             if not args.loop:
                 raise
         if not args.loop:
